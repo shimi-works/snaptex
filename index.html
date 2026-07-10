@@ -150,6 +150,14 @@
     <div class="card">
       <h2>② 結果（LaTeXテキスト）</h2>
       <div class="status" id="status"></div>
+      <div class="row" style="margin:0 0 8px">
+        <span class="muted">区切り記号：</span>
+        <div class="seg" id="delimSeg">
+          <button data-d="dollar" class="on" title="ChatGPT・Markdown向け">$ … $ 付き</button>
+          <button data-d="none" title="Wordの数式に貼る用">なし（Word用）</button>
+        </div>
+      </div>
+      <div class="muted" id="delimNote" style="margin:-4px 0 8px;display:none">Word用：本文と数式を分け、<code class="k">Alt</code>+<code class="k">=</code> の数式ボックスに1式ずつ貼り、<b>数式タブ→LaTeX→変換</b>。「数式だけ」モードが貼りやすいです。</div>
       <textarea id="out" placeholder="ここに書き起こし結果（LaTeX）が出ます。&#10;右下のコピーでそのままChatGPTへ。" spellcheck="false"></textarea>
       <div class="row" style="margin-top:10px">
         <button id="btnCopy" disabled>📋 コピー</button>
@@ -196,6 +204,9 @@
 const LS_KEY="snaptex_key", LS_MODEL="snaptex_model", LS_HIST="snaptex_hist", LS_MODE="snaptex_mode";
 let MODEL=localStorage.getItem(LS_MODEL)||"gemini-2.5-flash";
 let MODE=localStorage.getItem(LS_MODE)||"mix";
+const LS_DELIM="snaptex_delim";
+let DELIM=localStorage.getItem(LS_DELIM)||"dollar";
+let lastRaw="";   // APIが返した生テキスト（$付き・正典）。区切り切替とプレビューはこれを基準にする
 let curImage=null; // {mime, b64, dataUrl}
 const MODELPOOL=["gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"];
 
@@ -240,6 +251,28 @@ $("modeSeg").addEventListener("click",e=>{
   [...$("modeSeg").children].forEach(x=>x.classList.toggle("on",x===b));
 });
 [...$("modeSeg").children].forEach(x=>x.classList.toggle("on",x.dataset.mode===MODE));
+
+/* ================= 区切り記号 切替（生成しなおさず出力だけ変換） ================= */
+function applyDelim(){
+  let t=lastRaw;
+  if(DELIM==="none"){
+    // $$ → $ の順で除去し、\( \) \[ \] も外す（Wordの数式に直接貼る用）
+    t=t.replace(/\$\$/g,"").replace(/\$/g,"").replace(/\\[()\[\]]/g,"");
+    t=t.replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+  }
+  $("out").value=t;
+  $("btnCopy").disabled=!t;
+  renderMath();
+}
+$("delimSeg").addEventListener("click",e=>{
+  const b=e.target.closest("button[data-d]"); if(!b)return;
+  DELIM=b.dataset.d; localStorage.setItem(LS_DELIM,DELIM);
+  [...$("delimSeg").children].forEach(x=>x.classList.toggle("on",x===b));
+  $("delimNote").style.display=DELIM==="none"?"block":"none";
+  applyDelim();
+});
+[...$("delimSeg").children].forEach(x=>x.classList.toggle("on",x.dataset.d===DELIM));
+$("delimNote").style.display=DELIM==="none"?"block":"none";
 
 /* ================= プロンプト ================= */
 function buildPrompt(){
@@ -327,11 +360,10 @@ $("btnRun").addEventListener("click",async()=>{
   setStatus('<span class="spin"></span>認識中…（数式が多いと数十秒かかることがあります）');
   try{
     const text=await callVision();
-    $("out").value=text;
-    $("btnCopy").disabled=false;
-    setStatus("完了。コピーしてChatGPTなどに貼り付けてください。",false,true);
+    lastRaw=text;
+    applyDelim();   // out・コピー・プレビューをまとめて更新
+    setStatus(DELIM==="none"?"完了。Wordの数式ボックスに貼り、数式タブでLaTeX変換してください。":"完了。コピーしてChatGPTなどに貼り付けてください。",false,true);
     pushHist(text);
-    renderMath();
   }catch(err){
     setStatus(err.message||String(err),true);
   }finally{
@@ -351,9 +383,13 @@ $("btnCopy").addEventListener("click",async()=>{
   const b=$("btnCopy"); const o=b.textContent; b.textContent="✓ コピーしました"; setTimeout(()=>b.textContent=o,1200);
 });
 $("btnClear").addEventListener("click",()=>{
-  $("out").value=""; $("btnCopy").disabled=true; $("render").innerHTML=""; setStatus("");
+  lastRaw=""; $("out").value=""; $("btnCopy").disabled=true; $("render").innerHTML=""; setStatus("");
 });
-$("out").addEventListener("input",()=>{ $("btnCopy").disabled=!$("out").value; if($("chkRender").checked)debouncedRender(); });
+$("out").addEventListener("input",()=>{
+  if(DELIM==="dollar") lastRaw=$("out").value;   // $付きモードの手直しは正典に反映
+  $("btnCopy").disabled=!$("out").value;
+  if($("chkRender").checked)debouncedRender();
+});
 
 /* ================= 履歴 ================= */
 function pushHist(text){
@@ -369,7 +405,7 @@ function renderHist(){
     const row=document.createElement("div"); row.className="h";
     const t=document.createElement("div"); t.className="t"; t.textContent=(it.t||"").replace(/\s+/g," ").slice(0,80);
     const load=document.createElement("button"); load.textContent="開く";
-    load.onclick=()=>{$("out").value=it.t;$("btnCopy").disabled=false;renderMath();window.scrollTo({top:0,behavior:"smooth"});};
+    load.onclick=()=>{lastRaw=it.t;applyDelim();window.scrollTo({top:0,behavior:"smooth"});};
     const del=document.createElement("button"); del.textContent="🗑";
     del.onclick=()=>{const a=loadHist();a.splice(i,1);saveHist(a);renderHist();};
     row.append(t,load,del); el.append(row);
@@ -391,7 +427,7 @@ function ensureMathJax(cb){
 }
 function renderMath(){
   if(!$("chkRender").checked){$("render").innerHTML="";return;}
-  const txt=$("out").value; if(!txt){$("render").innerHTML="";return;}
+  const txt=lastRaw||$("out").value; if(!txt){$("render").innerHTML="";return;}  // プレビューは$付き正典で描画（区切りなし時も数式が出る）
   ensureMathJax(()=>{
     const el=$("render");
     // プレーン文はそのまま、$…$は数式として。改行を<br>に。
