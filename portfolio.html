@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SnapTeX — 技術説明・設計思想</title>
+<meta name="description" content="スクショの数式をLaTeXに書き起こす単一HTMLツール SnapTeX の技術説明・設計思想。数式入力のボトルネックを外す。単一HTML・Gemini API・BYOK。">
+</head>
+<body>
+<style>
+  :root{
+    --paper:#F7F4EC; --card:#FFFFFF; --ink:#25211B; --sub:#6C6456;
+    --line:#E4DECF; --accent:#2E6FB0; --accent-soft:#DCE7F0;
+    --grow:#3F6B4C; --grow-soft:#E7EFE8;
+    --mincho:"Hiragino Mincho ProN","Yu Mincho",YuMincho,"Noto Serif JP",Georgia,serif;
+    --gothic:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Yu Gothic",YuGothic,Meiryo,"Segoe UI",sans-serif;
+    --mono:"SFMono-Regular",ui-monospace,Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(60,45,30,.05),0 10px 30px rgba(60,45,30,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#0F1216; --card:#171B22; --ink:#E8EDF4; --sub:#9AA7B6;
+      --line:#2A323D; --accent:#5B9DFF; --accent-soft:#1B2735;
+      --grow:#7BD88F; --grow-soft:#16241C;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#0F1216; --card:#171B22; --ink:#E8EDF4; --sub:#9AA7B6;
+    --line:#2A323D; --accent:#5B9DFF; --accent-soft:#1B2735;
+    --grow:#7BD88F; --grow-soft:#16241C;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px rgba(0,0,0,.4);
+  }
+  :root[data-theme="light"]{
+    --paper:#F7F4EC; --card:#FFFFFF; --ink:#25211B; --sub:#6C6456;
+    --line:#E4DECF; --accent:#2E6FB0; --accent-soft:#DCE7F0;
+    --grow:#3F6B4C; --grow-soft:#E7EFE8;
+    --shadow:0 1px 2px rgba(60,45,30,.05),0 10px 30px rgba(60,45,30,.06);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--gothic);
+    line-height:1.85;-webkit-font-smoothing:antialiased;font-feature-settings:"palt" 1}
+  .wrap{max-width:760px;margin:0 auto;padding:56px 22px 100px}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+
+  .back{font-family:var(--mono);font-size:12px;letter-spacing:.06em;border:0;color:var(--sub);display:inline-block;margin:0 0 30px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 14px}
+  h1{font-family:var(--mincho);font-weight:600;font-size:clamp(34px,7vw,52px);line-height:1.15;
+    letter-spacing:.01em;margin:0 0 14px;text-wrap:balance}
+  .lede{font-family:var(--mincho);font-size:clamp(17px,2.6vw,21px);color:var(--ink);
+    line-height:1.7;margin:0 0 26px;text-wrap:balance}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 10px;margin:0 0 8px}
+  .meta span{font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;color:var(--sub);
+    border:1px solid var(--line);border-radius:20px;padding:5px 12px;white-space:nowrap}
+  .cta{margin:26px 0 4px;display:flex;gap:10px;flex-wrap:wrap}
+  .cta a{font-family:var(--gothic);font-size:14px;border:1px solid var(--line);border-radius:24px;
+    padding:9px 18px;color:var(--ink);background:var(--card)}
+  .cta a.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+  section{margin-top:56px}
+  h2{font-family:var(--mincho);font-weight:600;font-size:clamp(22px,4vw,28px);
+    margin:0 0 6px;letter-spacing:.01em}
+  .sec-label{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--sub);margin:0 0 18px}
+  h2 + .sec-label{margin-top:-2px}
+  p{margin:0 0 16px;max-width:64ch}
+  strong{color:var(--accent);font-weight:600}
+  em{font-style:normal;background:linear-gradient(transparent 62%,var(--accent-soft) 62%)}
+
+  /* before/after */
+  .flow{display:grid;grid-template-columns:1fr;gap:12px;margin:8px 0 4px}
+  @media(min-width:620px){.flow{grid-template-columns:1fr 1fr}}
+  .flow .c{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;box-shadow:var(--shadow)}
+  .flow .g{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--sub);margin:0 0 10px}
+  .flow .c.now{border-left:3px solid var(--accent)}
+  .flow ol{margin:0;padding-left:18px}.flow li{margin:0 0 7px}
+
+  .decision{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:4px;padding:22px 24px;margin:16px 0;box-shadow:var(--shadow)}
+  .decision h3{font-family:var(--mincho);font-size:19px;font-weight:600;margin:2px 0 16px;letter-spacing:.01em}
+  dl{margin:0;display:grid;gap:12px}
+  dl > div{display:grid;grid-template-columns:64px 1fr;gap:14px;align-items:baseline}
+  dt{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--accent);
+    text-transform:uppercase;padding-top:2px}
+  dd{margin:0;color:var(--ink)}
+  dd.q{color:var(--sub)}
+
+  .fmap{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:620px){.fmap{grid-template-columns:1fr 1fr}}
+  .fgroup{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .fgroup .g{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--sub);margin:0 0 10px}
+  .tags{display:flex;flex-wrap:wrap;gap:7px}
+  .tag{font-size:13px;background:var(--accent-soft);color:var(--ink);border-radius:20px;padding:5px 12px;line-height:1.4}
+
+  .stack{display:grid;gap:2px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .stack .row{display:grid;grid-template-columns:130px 1fr;gap:0;background:var(--card)}
+  .stack .k{font-family:var(--mono);font-size:12px;color:var(--accent);padding:12px 16px;letter-spacing:.03em}
+  .stack .v{padding:12px 16px;color:var(--ink);font-size:14.5px;border-left:1px solid var(--line)}
+  @media(max-width:520px){.stack .row{grid-template-columns:1fr}.stack .v{border-left:0;padding-top:0}}
+
+  .limit{background:var(--grow-soft);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .limit .g{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--grow);margin:0 0 10px}
+  .limit ul{margin:0;padding-left:18px}
+  .limit li{margin:0 0 9px;color:var(--ink)}
+  .limit li:last-child{margin-bottom:0}
+  .limit b{color:var(--grow);font-weight:600}
+
+  .axis{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:26px 24px;box-shadow:var(--shadow)}
+  .axis .quote{font-family:var(--mincho);font-size:20px;line-height:1.7;margin:0 0 12px;color:var(--ink);text-wrap:balance}
+
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:11.5px;color:var(--sub);letter-spacing:.04em}
+
+  @media (prefers-reduced-motion: no-preference){
+    .fade{opacity:0;transform:translateY(10px);animation:rise .7s ease forwards}
+    @keyframes rise{to{opacity:1;transform:none}}
+  }
+</style>
+
+<div class="wrap">
+
+  <a class="back" href="index.html">← アプリに戻る</a>
+
+  <header class="fade">
+    <p class="eyebrow">Case Study — Tool / OCR × LLM</p>
+    <h1>SnapTeX</h1>
+    <p class="lede">PDFやWebのスクショに写った数式を、<br>そのまま <em>LaTeXテキスト</em> に書き起こす。<br>「読めるのに、打つのが激重」——数式入力のボトルネックだけを外す道具。</p>
+    <div class="meta">
+      <span>制作 / 個人</span>
+      <span>形態 / 単一HTML・ノーサーバー</span>
+      <span>LLM / Google Gemini（無料枠・vision）</span>
+      <span>鍵 / BYOK・localStorage</span>
+      <span>PC / スマホ両対応</span>
+      <span>2026</span>
+    </div>
+    <div class="cta">
+      <a class="pri" href="index.html">アプリを開く</a>
+      <a href="https://github.com/shimi-works/snaptex" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </header>
+
+  <section class="fade">
+    <h2>これは何か</h2>
+    <p class="sec-label">Overview</p>
+    <p>数式のスクリーンショットを貼ると、Gemini の画像認識で中身を読み取り、<strong>LaTeX テキスト</strong>にして返す。
+      出したテキストはそのまま ChatGPT に「文字」で送れるし、区切り記号を外して Word の数式にも貼れる。</p>
+    <p>きっかけは単純で、<strong>ChatGPT への画像貼り付けには1日の厳しい制限がある</strong>のに、テキストのやり取りには実質制限がないこと。
+      だったら「画像 → 文字」の一手間を自動化すれば、制限の壁ごと消える。</p>
+  </section>
+
+  <section class="fade">
+    <h2>設計思想</h2>
+    <p class="sec-label">Design Philosophy</p>
+    <p>数式は「読める・理解できる」のに「入力が異常にだるい」典型だ。<code>\frac</code> や上下付き、総和記号を手で打ち直す時間が、
+      学習やレポート作成のたびに積み上がる。SnapTeX はその<em>入力工程だけ</em>を丸ごと外すことに機能を寄せた。</p>
+    <div class="flow">
+      <div class="c">
+        <div class="g">Before</div>
+        <ol><li>数式を見る</li><li>頭でLaTeX/Word数式に翻訳</li><li>手で打ち直す（一番遅い）</li><li>ミスを直す</li></ol>
+      </div>
+      <div class="c now">
+        <div class="g">After — SnapTeX</div>
+        <ol><li>スクショを撮る</li><li>貼る（PCはCtrl+V／スマホはタップ選択）</li><li>変換</li><li>コピーして貼る</li></ol>
+      </div>
+    </div>
+    <p>「賢い一発回答」を目指すのではなく、<strong>汎用（ChatGPTへ）と専用（Wordへ）の両方を1つの道具で</strong>賄い、
+      毎日の摩擦を小さくすることに価値を置いている。</p>
+  </section>
+
+  <section class="fade">
+    <h2>技術構成</h2>
+    <p class="sec-label">Architecture</p>
+    <div class="stack">
+      <div class="row"><div class="k">Frontend</div><div class="v">単一HTMLファイル（HTML/CSS/JS内包）・ビルドなし・ノーサーバー</div></div>
+      <div class="row"><div class="k">認識</div><div class="v">Gemini vision をブラウザから直叩き（inlineData で画像を送信）</div></div>
+      <div class="row"><div class="k">入力</div><div class="v">クリップボード貼付・ドラッグ＆ドロップ・ファイル選択（スマホはギャラリー/カメラ）</div></div>
+      <div class="row"><div class="k">出力</div><div class="v">2モード（文章＋数式／数式だけ）× 区切り記号トグル（$付き／なし）</div></div>
+      <div class="row"><div class="k">プレビュー</div><div class="v">MathJax（CDN・接続時）で描画。認識結果を目視確認</div></div>
+      <div class="row"><div class="k">保存</div><div class="v">APIキー・履歴・設定は localStorage のみ（端末内）</div></div>
+      <div class="row"><div class="k">公開</div><div class="v">GitHub Pages（静的配信）</div></div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>主要な技術的判断</h2>
+    <p class="sec-label">Key Decisions — 課題 / 判断 / 理由</p>
+
+    <div class="decision">
+      <h3>Wordに貼ると <code>$$</code> が残る問題</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">Wordの数式は <code>$…$</code> / <code>$$…$$</code> という区切りを解釈せず、文字として残ってしまう。</dd></div>
+        <div><dt>判断</dt><dd><strong>区切り記号トグル</strong>を用意し、「$付き（ChatGPT向け）」と「なし（Word向け）」を<strong>生成しなおさず出力だけ切替</strong>。中身の <code>\frac</code> 等は保持したまま <code>$</code> だけ剥がす。</dd></div>
+        <div><dt>理由</dt><dd>認識は1回で十分。用途（送り先）によって表層だけ変えれば、APIコールも待ち時間も増えない。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>複数式を一度に扱う</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">1枚に何式もある教科書・論文ページ。Wordは「1式＝1数式ボックス」が一番きれいに組める。</dd></div>
+        <div><dt>判断</dt><dd><strong>式ごとコピー</strong>——出力を <code>$$…$$</code> 単位で切り出し、式ごとにプレビュー＋コピーボタンを並べる。<code>Alt</code>+<code>=</code> のボックスへ1つずつ確実に貼れる。</dd></div>
+        <div><dt>理由</dt><dd>「まとめて1回」より「1式ずつ手応えを持って」の方が、貼り先を選べて事故らない。手動コピーの確認感はあえて残した。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>無料枠のレート制限に耐える</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">Gemini無料枠には上限（429）や一時的な混雑（503）がある。</dd></div>
+        <div><dt>判断</dt><dd>上限に当たったら<strong>自動で別モデルへ巡回</strong>（無料枠はモデルごとに別枠）、混雑は<strong>待って自動リトライ</strong>、エラーは日本語で「いつ直るか」を案内。</dd></div>
+        <div><dt>理由</dt><dd>個人利用でサーバーを持たない前提なら、詰まりどころを先回りで吸収しておくのが一番効く。</dd></div>
+      </dl>
+    </div>
+
+    <div class="decision">
+      <h3>鍵はコードに書かない（BYOK）</h3>
+      <dl>
+        <div><dt>課題</dt><dd class="q">静的配信でAPIを使うと、鍵の置き場所が問題になる。</dd></div>
+        <div><dt>判断</dt><dd>各自の鍵を設定画面で入力し <strong>localStorage にのみ保存</strong>。サーバーを介さず、Google以外へは送らない。</dd></div>
+        <div><dt>理由</dt><dd>ノーサーバーを保ったまま安全側に倒す。共有PCでは設定から即消せる。</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>機能マップ</h2>
+    <p class="sec-label">Features</p>
+    <div class="fmap">
+      <div class="fgroup"><div class="g">入力</div><div class="tags">
+        <span class="tag">Ctrl+V 貼り付け</span><span class="tag">ドロップ</span><span class="tag">ファイル選択</span><span class="tag">スマホ=タップ/カメラ</span>
+      </div></div>
+      <div class="fgroup"><div class="g">認識</div><div class="tags">
+        <span class="tag">文章＋数式</span><span class="tag">数式だけ</span><span class="tag">英文そのまま</span><span class="tag">表はMarkdown化</span>
+      </div></div>
+      <div class="fgroup"><div class="g">出力</div><div class="tags">
+        <span class="tag">$付き / なし 切替</span><span class="tag">式ごとコピー</span><span class="tag">全文コピー</span><span class="tag">手直し可</span>
+      </div></div>
+      <div class="fgroup"><div class="g">確認・その他</div><div class="tags">
+        <span class="tag">MathJaxプレビュー</span><span class="tag">履歴20件</span><span class="tag">自動モデル巡回</span><span class="tag">PC/スマホ</span>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>制約と割り切り</h2>
+    <p class="sec-label">Honest Limitations</p>
+    <div class="limit">
+      <div class="g">Trade-offs</div>
+      <ul>
+        <li><b>認識精度はモデル依存。</b> 複雑な多段分数・手書き・低解像度・化学構造などは誤ることがある。だから<b>プレビューで目視確認 → テキストを直接手直し</b>できる導線を必ず残した。</li>
+        <li><b>プレビューはネット接続時のみ</b>（MathJaxをCDN取得）。オフラインでも変換テキスト自体は使える。</li>
+        <li><b>画像はGemini（Google）へ送信される。</b> アプリ側には保存しないが、機密資料の扱いは利用者の判断に委ねる。</li>
+        <li><b>混在モードの「区切りなし」はインライン数式の目印が消える。</b> Word用途では「数式だけ」モードを推奨、という設計上の割り切り。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="fade">
+    <h2>この作品の位置づけ</h2>
+    <p class="sec-label">Portfolio Axis</p>
+    <div class="axis">
+      <p class="quote">「学習と創作の“めんどくさい一歩”を、体験として設計し直す。」</p>
+      <p>語彙を暇つぶしで育てるツール、傾けて絵が変わるレンチキュラー——一連の制作に共通するのは、
+        <strong>やりたいことの手前にある摩擦をデザインで溶かす</strong>という軸だ。SnapTeX はその「数式入力」版。
+        小さいが、勉強やレポートのたびに毎回効く種類の道具を目指した。</p>
+    </div>
+  </section>
+
+  <footer>SnapTeX — 技術説明・設計思想 / 個人制作 / 単一HTML + Gemini API（vision）+ localStorage / 2026</footer>
+
+</div>
+</body>
+</html>

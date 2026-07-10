@@ -58,6 +58,16 @@
   }
   #render{background:#0c1116;border:1px solid var(--line);border-radius:10px;padding:14px;min-height:60px;overflow-x:auto;color:#e8edf4}
   #render:empty{display:none}
+  .navlink{font:inherit;color:var(--fg);border:1px solid var(--line);background:var(--panel2);border-radius:9px;padding:8px 12px;text-decoration:none;transition:.12s}
+  .navlink:hover{border-color:var(--accent);background:#232c38}
+  /* 式ごとコピー */
+  #eqCard{display:none}
+  .eq{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin-bottom:8px}
+  .eq .eqidx{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--chip);color:var(--muted);font-size:12px;display:flex;align-items:center;justify-content:center}
+  .eq .eqprev{flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;color:#e8edf4;white-space:nowrap}
+  .eq .eqcode{flex:0 0 32%;max-width:32%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)}
+  .eq button{flex:0 0 auto;padding:6px 10px}
+  @media(max-width:760px){ .eq .eqcode{display:none} }
   .muted{color:var(--muted);font-size:12.5px}
   .status{min-height:20px;font-size:13px}
   .status.err{color:var(--danger)}
@@ -103,6 +113,7 @@
   <h1><span class="tag">Snap</span>TeX</h1>
   <span class="sub">スクショの数式を LaTeX テキストに ― ChatGPTへ文字で送るために</span>
   <span class="spacer"></span>
+  <a class="navlink" href="portfolio.html" title="技術説明・設計思想">技術</a>
   <button class="ghost" id="btnKey" title="APIキー・モデル設定">⚙ 設定</button>
 </header>
 
@@ -167,6 +178,10 @@
           <input type="checkbox" id="chkRender" checked style="width:auto"> プレビュー表示
         </label>
       </div>
+    </div>
+    <div class="card" id="eqCard">
+      <h2>式ごとにコピー <span class="muted" style="text-transform:none;font-weight:400;letter-spacing:normal">― 複数式のとき。1式ずつWordの数式ボックスへ</span></h2>
+      <div id="eqlist"></div>
     </div>
     <div class="card" id="renderCard">
       <h2>③ 数式プレビュー（確認用）</h2>
@@ -263,6 +278,50 @@ function applyDelim(){
   $("out").value=t;
   $("btnCopy").disabled=!t;
   renderMath();
+  renderEqList();
+}
+
+/* ---- クリップボードコピー（フォールバック付き） ---- */
+async function copyText(t){
+  if(!t) return;
+  try{ await navigator.clipboard.writeText(t); return; }catch(_){}
+  const ta=document.createElement("textarea");
+  ta.value=t; ta.style.position="fixed"; ta.style.opacity="0";
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try{ document.execCommand("copy"); }catch(e){}
+  ta.remove();
+}
+
+/* ---- 複数式：$$…$$ / $…$ を順に切り出す ---- */
+function extractEquations(raw){
+  const out=[]; const re=/\$\$([\s\S]*?)\$\$|\$([^$\n]+?)\$/g; let m;
+  while((m=re.exec(raw))){
+    const disp=m[1]!=null; const tex=(disp?m[1]:m[2]).trim();
+    if(tex) out.push({disp,tex});
+  }
+  return out;
+}
+function eqCopyText(eq){
+  return DELIM==="none" ? eq.tex : (eq.disp ? "$$"+eq.tex+"$$" : "$"+eq.tex+"$");
+}
+function renderEqList(){
+  const host=$("eqlist"), card=$("eqCard");
+  const eqs = lastRaw ? extractEquations(lastRaw) : [];
+  if(eqs.length<2){ card.style.display="none"; host.innerHTML=""; return; }  // 2式以上のときだけ出す
+  card.style.display=""; host.innerHTML="";
+  const previews=[];
+  eqs.forEach((eq,i)=>{
+    const row=document.createElement("div"); row.className="eq";
+    const idx=document.createElement("span"); idx.className="eqidx"; idx.textContent=i+1;
+    const prev=document.createElement("div"); prev.className="eqprev";
+    prev.textContent="\\("+eq.tex+"\\)";     // 1行に収めるためインライン表示で描画
+    const ct=eqCopyText(eq);
+    const code=document.createElement("div"); code.className="eqcode tex2jax_ignore"; code.textContent=ct; code.title=ct;
+    const btn=document.createElement("button"); btn.textContent="📋"; btn.title="この式をコピー";
+    btn.onclick=async()=>{ await copyText(ct); const o=btn.textContent; btn.textContent="✓"; setTimeout(()=>btn.textContent=o,1000); };
+    row.append(idx,prev,code,btn); host.append(row); previews.push(prev);
+  });
+  ensureMathJax(()=>{ if(window.MathJax?.typesetPromise) window.MathJax.typesetPromise(previews).catch(()=>{}); });
 }
 $("delimSeg").addEventListener("click",e=>{
   const b=e.target.closest("button[data-d]"); if(!b)return;
@@ -281,7 +340,7 @@ function buildPrompt(){
       "あなたは画像内の数式を正確に読み取るOCRです。",
       "画像に写っている数式だけを抽出し、それぞれをLaTeXで書き出してください。",
       "・独立した数式は 1つにつき $$ … $$ で囲み、1行に1式。",
-      "・複数式や連立は環境(aligned等)を適切に使う。",
+      "・別々の数式は別々の $$ … $$ に分ける（1式＝1ブロック）。本来ひとつの連立・整列された式のみ aligned 等で1ブロックにまとめる。",
       "・通常の文章・見出し・図の説明は無視する。",
       "・記号は原則そのまま（\\alpha, \\sum, \\int, 添字 x_{i}, 分数 \\frac{}{} 等）。",
       "・前置き・解説・コードフェンス(```)は一切付けず、LaTeXだけを返す。"
@@ -378,8 +437,7 @@ function setStatus(html,isErr,isOk){
 /* ================= コピー／クリア ================= */
 $("btnCopy").addEventListener("click",async()=>{
   const t=$("out").value; if(!t)return;
-  try{await navigator.clipboard.writeText(t);}
-  catch(_){ $("out").select(); document.execCommand("copy"); }
+  await copyText(t);
   const b=$("btnCopy"); const o=b.textContent; b.textContent="✓ コピーしました"; setTimeout(()=>b.textContent=o,1200);
 });
 $("btnClear").addEventListener("click",()=>{
