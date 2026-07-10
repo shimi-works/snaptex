@@ -168,7 +168,7 @@
           <button data-d="none" title="Wordの数式に貼る用">なし（Word用）</button>
         </div>
       </div>
-      <div class="muted" id="delimNote" style="margin:-4px 0 8px;display:none">Word用：本文と数式を分け、<code class="k">Alt</code>+<code class="k">=</code> の数式ボックスに1式ずつ貼り、<b>数式タブ→LaTeX→変換</b>。「数式だけ」モードが貼りやすいです。</div>
+      <div class="muted" id="delimNote" style="margin:-4px 0 8px;display:none">Word用：<code class="k">Alt</code>+<code class="k">=</code> の数式ボックスに貼り、<b>数式タブ→LaTeX→変換</b>。和文は自動で <code class="k">\text{ }</code> で包むので、Wordでも立体（非斜体）になります。式ごとに貼るなら「数式だけ」モードが手早いです。</div>
       <textarea id="out" placeholder="ここに書き起こし結果（LaTeX）が出ます。&#10;右下のコピーでそのままChatGPTへ。" spellcheck="false"></textarea>
       <div class="row" style="margin-top:10px">
         <button id="btnCopy" disabled>📋 コピー</button>
@@ -268,11 +268,18 @@ $("modeSeg").addEventListener("click",e=>{
 [...$("modeSeg").children].forEach(x=>x.classList.toggle("on",x.dataset.mode===MODE));
 
 /* ================= 区切り記号 切替（生成しなおさず出力だけ変換） ================= */
+// Wordの数式ボックスは中に入れたものを全部mathとして斜体にする。和文は斜体にしないので、
+// $で包む方式（プレビュー/ChatGPT用）ではなく \text{} で和文の連続を包んで立体にする。
+// 数式側のラテン文字・記号は \text の外なのでイタリックのまま残る。
+function wrapJaForWord(s){
+  return s.replace(/[\u3000-\u30FF\u3400-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]+/g, m=>"\\text{"+m+"}");
+}
 function applyDelim(){
   let t=lastRaw;
   if(DELIM==="none"){
     // $$ → $ の順で除去し、\( \) \[ \] も外す（Wordの数式に直接貼る用）
     t=t.replace(/\$\$/g,"").replace(/\$/g,"").replace(/\\[()\[\]]/g,"");
+    t=wrapJaForWord(t);   // 和文を \text{} で包む（Wordで立体にするため。ラテン文字の数式は対象外）
     t=t.replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
   }
   $("out").value=t;
