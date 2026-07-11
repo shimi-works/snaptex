@@ -199,7 +199,7 @@
     <h3>設定</h3>
     <p class="muted">このアプリは Google の <b>Gemini（無料枠・クレカ不要）</b> を直接呼び出します。キーは<b>この端末にのみ</b>保存され、Google以外へは送りません。</p>
     <label>Gemini API キー</label>
-    <input id="apiKey" type="password" placeholder="AIza... で始まるキー" autocomplete="off">
+    <input id="apiKey" type="password" placeholder="APIキーを貼り付け" autocomplete="off">
     <p class="muted" style="margin:6px 0 0">取得：<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio → Get API key</a>（無料）</p>
     <label>モデル</label>
     <select id="modelSelect">
@@ -473,16 +473,23 @@ function renderHist(){
 }
 
 /* ================= MathJax プレビュー ================= */
-let mjReady=false,mjLoading=false;
+let mjReady=false,mjLoading=false,mjFailed=false,mjQueue=[];
+function flushMj(){ const q=mjQueue; mjQueue=[]; q.forEach(fn=>{try{fn();}catch(e){}}); }
 function ensureMathJax(cb){
+  if(mjFailed){return;}
   if(mjReady){cb();return;}
+  mjQueue.push(cb);            // 読込中に来た描画要求も取りこぼさずキューへ
   if(mjLoading){return;}
   mjLoading=true;
   window.MathJax={loader:{load:["[tex]/mhchem"]},tex:{packages:{"[+]":["mhchem"]},inlineMath:[["$","$"],["\\(","\\)"]],displayMath:[["$$","$$"],["\\[","\\]"]]},svg:{fontCache:"global"},startup:{typeset:false}};  // mhchem=化学式 \ce{} 対応
   const s=document.createElement("script");
   s.src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
-  s.onload=()=>{mjReady=true;cb();};
-  s.onerror=()=>{mjLoading=false;$("renderNote").textContent="※ ネット未接続などでプレビューを読み込めませんでした（結果テキストは使えます）。";};
+  s.onload=()=>{
+    // onload直後はまだ startup（mhchem拡張の読込含む）が未完了。完了を待ってから描画する
+    const p=(window.MathJax&&window.MathJax.startup&&window.MathJax.startup.promise)||Promise.resolve();
+    p.then(()=>{mjReady=true;flushMj();},()=>{mjReady=true;flushMj();});
+  };
+  s.onerror=()=>{mjFailed=true;mjLoading=false;mjQueue=[];$("renderNote").textContent="※ ネット未接続などでプレビューを読み込めませんでした（結果テキストは使えます）。";};
   document.head.appendChild(s);
 }
 function renderMath(){
