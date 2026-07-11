@@ -304,7 +304,11 @@ function applyDelim(){
     t=t.replace(/\$([^$\n]+?)\$/g,(m,x)=>x);
     // 取り残しの $ と \( \) \[ \] を除去
     t=t.replace(/\$/g,"").replace(/\\[()\[\]]/g,"");
-    t=t.replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
+    // Wordは aligned の整列マーカー & を解釈できず literal で残すので、平文の複数行に落として & を除去
+    t=t.replace(/\\begin\{align(?:ed)?\*?\}|\\end\{align(?:ed)?\*?\}/g,"");
+    t=t.replace(/\\\\/g,"\n");   // LaTeXの改行 \\ を実改行に
+    t=t.replace(/&/g,"");        // 整列マーカー & を除去
+    t=t.replace(/^[ \t]+/gm,"").replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
   }
   $("out").value=t;
   $("btnCopy").disabled=!t;
