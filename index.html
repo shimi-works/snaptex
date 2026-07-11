@@ -46,7 +46,12 @@
   #drop.hot{border-color:var(--accent);background:#1a2431;color:var(--fg)}
   #drop .big{font-size:15px;color:var(--fg);font-weight:600}
   #drop kbd{background:var(--chip);border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:1px 7px;font-size:12.5px;font-family:ui-monospace,monospace}
-  #preview{max-width:100%;max-height:340px;border-radius:8px;display:none;margin-top:2px;border:1px solid var(--line)}
+  #thumbs{display:none;flex-wrap:wrap;gap:8px;justify-content:center;align-items:flex-start;margin-top:2px}
+  .thumb{position:relative;width:96px;height:96px;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:#0c1116}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .tn{position:absolute;top:3px;left:3px;background:rgba(0,0,0,.62);color:#fff;font-size:11px;font-weight:700;padding:0 6px;border-radius:6px}
+  .thumb .tx{position:absolute;top:3px;right:3px;width:20px;height:20px;padding:0;border-radius:50%;background:rgba(0,0,0,.62);color:#fff;border:0;font-size:15px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .thumb .tx:hover{background:var(--danger)}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
   .seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
   .seg button{border:0;border-radius:0;padding:7px 12px;background:transparent}
@@ -101,7 +106,7 @@
     .wrap{padding:12px;gap:12px}
     .card{padding:12px;border-radius:12px}
     #drop{min-height:170px}
-    #preview{max-height:260px}
+    .thumb{width:80px;height:80px}
     textarea#out{min-height:180px;font-size:13px}
     button{padding:9px 13px}   /* タップ領域を確保 */
     .seg button{padding:9px 13px}
@@ -127,17 +132,17 @@
           <div class="hint-pc">
             <div class="big">ここに <kbd>Ctrl</kbd>+<kbd>V</kbd> で貼り付け</div>
             <div class="muted"><kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> で範囲スクショ → そのまま貼り付け</div>
-            <div class="muted">／ 画像ファイルをドロップ・クリックで選択も可</div>
+            <div class="muted">／ 画像ファイルをドロップ・選択（<b>複数まとめてOK</b>）</div>
           </div>
           <div class="hint-touch">
             <div class="big">📷 タップして画像を選択</div>
             <div class="muted">スマホのスクショ（数式の画面）を選んでください</div>
-            <div class="muted">カメラで撮影してもOK</div>
+            <div class="muted">複数選択・カメラ撮影もOK</div>
           </div>
         </div>
-        <img id="preview" alt="preview">
+        <div id="thumbs"></div>
       </div>
-      <input type="file" id="file" accept="image/*" hidden>
+      <input type="file" id="file" accept="image/*" multiple hidden>
       <div class="row" style="margin-top:12px">
         <span class="muted">出力：</span>
         <div class="seg" id="modeSeg">
@@ -226,7 +231,7 @@ let DELIM=localStorage.getItem(LS_DELIM)||"dollar";
 const LS_ALIGN="snaptex_align";
 let ALIGN=localStorage.getItem(LS_ALIGN)==="1";   // 導出を = で揃える（aligned）
 let lastRaw="";   // APIが返した生テキスト（$付き・正典）。区切り切替とプレビューはこれを基準にする
-let curImage=null; // {mime, b64, dataUrl}
+let images=[]; // [{mime, b64, dataUrl}] 複数枚対応
 const MODELPOOL=["gemini-flash-latest","gemini-3.5-flash","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"];
 
 const $=id=>document.getElementById(id);
@@ -234,34 +239,52 @@ function getKey(){return localStorage.getItem(LS_KEY)||"";}
 function loadHist(){try{return JSON.parse(localStorage.getItem(LS_HIST))||[]}catch(e){return[]}}
 function saveHist(h){localStorage.setItem(LS_HIST,JSON.stringify(h.slice(0,20)))}
 
-/* ================= 画像取り込み ================= */
-function setImage(blob){
-  if(!blob||!/^image\//.test(blob.type||"")){setStatus("画像として認識できませんでした。",true);return;}
-  const fr=new FileReader();
-  fr.onload=()=>{
-    const url=fr.result;
-    const b64=url.split(",")[1]||"";
-    curImage={mime:blob.type||"image/png",b64,dataUrl:url};
-    const img=$("preview"); img.src=url; img.style.display="block";
-    $("dropHint").style.display="none";
-    $("btnRun").disabled=false;
-    setStatus("画像を読み込みました。『LaTeXに変換』を押してください。");
-  };
-  fr.readAsDataURL(blob);
+/* ================= 画像取り込み（複数枚対応） ================= */
+function readBlob(blob){
+  return new Promise(res=>{
+    if(!blob||!/^image\//.test(blob.type||"")){res(null);return;}
+    const fr=new FileReader();
+    fr.onload=()=>{ const url=fr.result; res({mime:blob.type||"image/png",b64:(url.split(",")[1]||""),dataUrl:url}); };
+    fr.onerror=()=>res(null);
+    fr.readAsDataURL(blob);
+  });
 }
-// 貼り付け（どこでも Ctrl+V）
+async function addBlobs(list){
+  const files=[...list].filter(f=>f&&/^image\//.test(f.type||""));
+  if(!files.length){ setStatus("画像として認識できませんでした。",true); return; }
+  for(const f of files){ const im=await readBlob(f); if(im) images.push(im); }
+  renderThumbs();
+  $("btnRun").disabled=!images.length;
+  setStatus(images.length===1?"画像を1枚読み込みました。『LaTeXに変換』を押してください。":images.length+"枚 読み込みました。まとめて変換できます（＋で追加も可）。");
+}
+function renderThumbs(){
+  const host=$("thumbs");
+  $("dropHint").style.display=images.length?"none":"";
+  host.style.display=images.length?"flex":"none";
+  host.innerHTML="";
+  images.forEach((im,i)=>{
+    const w=document.createElement("div"); w.className="thumb"; w.onclick=e=>e.stopPropagation();
+    const img=document.createElement("img"); img.src=im.dataUrl; img.alt="";
+    const n=document.createElement("span"); n.className="tn"; n.textContent=i+1;
+    const x=document.createElement("button"); x.className="tx"; x.textContent="×"; x.title="この画像を外す";
+    x.onclick=e=>{ e.stopPropagation(); images.splice(i,1); renderThumbs(); $("btnRun").disabled=!images.length; if(!images.length)setStatus(""); };
+    w.append(img,n,x); host.append(w);
+  });
+}
+// 貼り付け（どこでも Ctrl+V）— 複数画像も追加
 window.addEventListener("paste",e=>{
   const items=(e.clipboardData||window.clipboardData)?.items||[];
-  for(const it of items){ if(it.type&&it.type.indexOf("image")===0){ setImage(it.getAsFile()); e.preventDefault(); return; } }
+  const files=[]; for(const it of items){ if(it.type&&it.type.indexOf("image")===0){ const f=it.getAsFile(); if(f)files.push(f); } }
+  if(files.length){ e.preventDefault(); addBlobs(files); }
 });
 // ドロップ
 const drop=$("drop");
 ["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot")}));
 ["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("hot")}));
-drop.addEventListener("drop",e=>{const f=e.dataTransfer?.files?.[0]; if(f)setImage(f);});
+drop.addEventListener("drop",e=>{const fs=e.dataTransfer?.files; if(fs&&fs.length)addBlobs(fs);});
 drop.addEventListener("click",()=>$("file").click());
 drop.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" ")$("file").click()});
-$("file").addEventListener("change",e=>{const f=e.target.files?.[0]; if(f)setImage(f); e.target.value="";});
+$("file").addEventListener("change",e=>{ if(e.target.files&&e.target.files.length)addBlobs(e.target.files); e.target.value=""; });
 
 /* ================= モード切替 ================= */
 $("modeSeg").addEventListener("click",e=>{
@@ -380,10 +403,10 @@ function buildPrompt(){
 }
 
 /* ================= Gemini Vision 呼び出し ================= */
-async function callVision(){
+async function callVision(img){
   const key=getKey();
   if(!key){openKey();throw new Error("APIキーが未設定です（設定から入力）。");}
-  if(!curImage) throw new Error("画像がありません。");
+  if(!img) throw new Error("画像がありません。");
   const pool=[MODEL,...MODELPOOL.filter(m=>m!==MODEL)];
   const prompt=buildPrompt();
   let lastErr="";
@@ -392,7 +415,7 @@ async function callVision(){
     const body={
       contents:[{parts:[
         {text:prompt},
-        {inlineData:{mimeType:curImage.mime,data:curImage.b64}}
+        {inlineData:{mimeType:img.mime,data:img.b64}}
       ]}],
       generationConfig:{maxOutputTokens:8192,temperature:0}
     };
@@ -436,18 +459,26 @@ async function callVision(){
 
 /* ================= 実行 ================= */
 $("btnRun").addEventListener("click",async()=>{
+  if(!images.length) return;
   $("btnRun").disabled=true;
-  setStatus('<span class="spin"></span>認識中…（数式が多いと数十秒かかることがあります）');
+  const total=images.length, parts=[]; let done=0, failed=0;
   try{
-    const text=await callVision();
-    lastRaw=text;
+    for(let i=0;i<total;i++){
+      setStatus('<span class="spin"></span>認識中…'+(total>1?`（${i+1}/${total}枚）`:'（数式が多いと数十秒かかることがあります）'));
+      try{ const t=await callVision(images[i]); if(t){parts.push(t);done++;} }
+      catch(e){ failed++; parts.push(`［${i+1}枚目：変換に失敗しました（${e.message||e}）］`); }
+    }
+    lastRaw=parts.join("\n\n");
     applyDelim();   // out・コピー・プレビューをまとめて更新
-    setStatus(DELIM==="none"?"完了。Wordの数式ボックスに貼り、数式タブでLaTeX変換してください。":"完了。コピーしてChatGPTなどに貼り付けてください。",false,true);
-    pushHist(text);
+    pushHist(lastRaw);
+    let msg = total>1 ? `${done}/${total}枚を変換しました。` : "完了。";
+    if(failed) msg += `（${failed}枚失敗）`;
+    msg += DELIM==="none" ? "Wordの数式ボックスに貼り、数式タブでLaTeX変換してください。" : "コピーしてChatGPTなどに貼り付けてください。";
+    setStatus(msg, done===0, failed===0);
   }catch(err){
     setStatus(err.message||String(err),true);
   }finally{
-    $("btnRun").disabled=!curImage;
+    $("btnRun").disabled=!images.length;
   }
 });
 
@@ -463,6 +494,7 @@ $("btnCopy").addEventListener("click",async()=>{
 });
 $("btnClear").addEventListener("click",()=>{
   lastRaw=""; $("out").value=""; $("btnCopy").disabled=true; $("render").innerHTML=""; setStatus("");
+  images=[]; renderThumbs(); $("btnRun").disabled=true;   // 画像キューもリセット
 });
 $("out").addEventListener("input",()=>{
   if(DELIM==="dollar") lastRaw=$("out").value;   // $付きモードの手直しは正典に反映
