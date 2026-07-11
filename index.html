@@ -298,8 +298,12 @@ $("modeSeg").addEventListener("click",e=>{
 function applyDelim(){
   let t=lastRaw;
   if(DELIM==="none"){
-    // $$ → $ の順で除去し、\( \) \[ \] も外す（Wordの数式に直接貼る用）
-    t=t.replace(/\$\$/g,"").replace(/\$/g,"").replace(/\\[()\[\]]/g,"");
+    // 別行立て $$…$$ は「1式＝1行」に分離（Wordで別々の数式に分かれ、複数式でのガタつきを防ぐ）
+    t=t.replace(/\$\$([\s\S]*?)\$\$/g,(m,x)=>"\n"+x.trim()+"\n");
+    // インライン $…$ は中身だけに
+    t=t.replace(/\$([^$\n]+?)\$/g,(m,x)=>x);
+    // 取り残しの $ と \( \) \[ \] を除去
+    t=t.replace(/\$/g,"").replace(/\\[()\[\]]/g,"");
     t=t.replace(/[ \t]+\n/g,"\n").replace(/\n{3,}/g,"\n\n").trim();
   }
   $("out").value=t;
@@ -377,7 +381,7 @@ function buildPrompt(){
     return [
       "あなたは画像内の数式を正確に読み取るOCRです。",
       "画像に写っている数式だけを抽出し、それぞれをLaTeXで書き出してください。",
-      "・独立した数式は 1つにつき $$ … $$ で囲み、1行に1式。",
+      "・独立した数式は 1つにつき $$ … $$ で囲み、必ず改行で区切る（1行に複数の $$…$$ を並べない・1行に1式）。",
       groupRule,
       "・通常の文章・見出し・図の説明は無視する。",
       "・記号は原則そのまま（\\alpha, \\sum, \\int, 添字 x_{i}, 分数 \\frac{}{} 等）。",
