@@ -203,7 +203,8 @@
     <p class="muted" style="margin:6px 0 0">取得：<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio → Get API key</a>（無料）</p>
     <label>モデル</label>
     <select id="modelSelect">
-      <option value="gemini-2.5-flash">gemini-2.5-flash（数式精度・推奨）</option>
+      <option value="gemini-flash-latest">gemini-flash-latest（最新を自動追従・推奨）</option>
+      <option value="gemini-3.5-flash">gemini-3.5-flash（最新・高品質）</option>
       <option value="gemini-2.5-flash-lite">gemini-2.5-flash-lite（軽量・上限ゆるめ）</option>
       <option value="gemini-2.0-flash">gemini-2.0-flash（フォールバック別枠）</option>
     </select>
@@ -217,13 +218,13 @@
 <script>
 /* ================= 設定・状態 ================= */
 const LS_KEY="snaptex_key", LS_MODEL="snaptex_model", LS_HIST="snaptex_hist", LS_MODE="snaptex_mode";
-let MODEL=localStorage.getItem(LS_MODEL)||"gemini-2.5-flash";
+let MODEL=localStorage.getItem(LS_MODEL)||"gemini-flash-latest";
 let MODE=localStorage.getItem(LS_MODE)||"mix";
 const LS_DELIM="snaptex_delim";
 let DELIM=localStorage.getItem(LS_DELIM)||"dollar";
 let lastRaw="";   // APIが返した生テキスト（$付き・正典）。区切り切替とプレビューはこれを基準にする
 let curImage=null; // {mime, b64, dataUrl}
-const MODELPOOL=["gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"];
+const MODELPOOL=["gemini-flash-latest","gemini-3.5-flash","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"];
 
 const $=id=>document.getElementById(id);
 function getKey(){return localStorage.getItem(LS_KEY)||"";}
@@ -389,14 +390,17 @@ async function callVision(){
       if(res.status!==503&&res.status!==500)break;
       if(attempt<2)await new Promise(r=>setTimeout(r,1500*(attempt+1)));
     }
-    if(res.status===429&&mi<pool.length-1){lastErr="上限(429)";continue;}
     if(!res.ok){
-      let msg=res.status+" "+res.statusText;
-      try{const e=await res.json();msg=e.error?.message||msg;}catch(_){}
-      if(res.status===400&&/API.?key/i.test(msg))msg="APIキーが無効です。設定を確認してください。";
-      if(res.status===403)msg="APIキーが無効か、権限がありません。設定を確認してください。";
-      if(res.status===429)msg="全モデルで無料枠の上限に達しました。しばらく待つか、明日また試してください（無料枠は日本の昼ごろリセット）。";
-      if(res.status===503||res.status===500)msg="Geminiが一時的に混雑しています。数十秒おいて再試行してください。";
+      let msg=res.status+" "+res.statusText, raw="";
+      try{const e=await res.json();raw=e.error?.message||"";msg=raw||msg;}catch(_){}
+      // モデルが使えない/見つからない（新規ユーザー非提供・廃止・別名違い等）→ 次のモデルへ自動フォールバック
+      const modelGone=res.status===404||(res.status===400&&/no longer available|not\s*available|not\s*found|not\s*supported|unsupported|is not found/i.test(raw));
+      if((res.status===429||modelGone)&&mi<pool.length-1){ lastErr=modelGone?"モデル利用不可":"上限(429)"; continue; }
+      if(res.status===400&&/API.?key|API_KEY_INVALID/i.test(raw))msg="APIキーが無効です。設定を確認してください。";
+      else if(res.status===403)msg="APIキーが無効か、権限がありません。設定を確認してください。";
+      else if(res.status===429)msg="全モデルで無料枠の上限に達しました。しばらく待つか、明日また試してください（無料枠は日本の昼ごろリセット）。";
+      else if(modelGone)msg="利用できるモデルが見つかりませんでした。設定でモデルを変えて試すか、時間をおいてください。";
+      else if(res.status===503||res.status===500)msg="Geminiが一時的に混雑しています。数十秒おいて再試行してください。";
       throw new Error(msg);
     }
     const data=await res.json();
