@@ -144,6 +144,7 @@
           <button data-mode="mix" class="on">文章＋数式</button>
           <button data-mode="math">数式だけ</button>
         </div>
+        <label class="muted" title="一連の導出を1つの数式にまとめ = で縦に揃える（Word/ChatGPT向け）" style="display:flex;align-items:center;gap:6px;margin-left:12px;white-space:nowrap"><input type="checkbox" id="chkAlign" style="width:auto"> = で揃える</label>
         <span class="spacer" style="flex:1"></span>
         <button class="primary" id="btnRun" disabled>LaTeXに変換 ▶</button>
       </div>
@@ -222,6 +223,8 @@ let MODEL=localStorage.getItem(LS_MODEL)||"gemini-flash-latest";
 let MODE=localStorage.getItem(LS_MODE)||"mix";
 const LS_DELIM="snaptex_delim";
 let DELIM=localStorage.getItem(LS_DELIM)||"dollar";
+const LS_ALIGN="snaptex_align";
+let ALIGN=localStorage.getItem(LS_ALIGN)==="1";   // 導出を = で揃える（aligned）
 let lastRaw="";   // APIが返した生テキスト（$付き・正典）。区切り切替とプレビューはこれを基準にする
 let curImage=null; // {mime, b64, dataUrl}
 const MODELPOOL=["gemini-flash-latest","gemini-3.5-flash","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash"];
@@ -334,14 +337,25 @@ $("delimSeg").addEventListener("click",e=>{
 [...$("delimSeg").children].forEach(x=>x.classList.toggle("on",x.dataset.d===DELIM));
 $("delimNote").style.display=DELIM==="none"?"block":"none";
 
+/* ================= そろえる（aligned）トグル ================= */
+$("chkAlign").checked=ALIGN;
+$("chkAlign").addEventListener("change",()=>{
+  ALIGN=$("chkAlign").checked; localStorage.setItem(LS_ALIGN,ALIGN?"1":"0");
+  if(lastRaw) setStatus("「= で揃える」を変更しました。もう一度『LaTeXに変換』すると反映されます。");
+});
+
 /* ================= プロンプト ================= */
 function buildPrompt(){
+  // 「そろえる」ON: 一連の変形を1つの aligned にまとめ = で整列 ／ OFF: 1式=1ブロック
+  const groupRule = ALIGN
+    ? "・前の式から続く一連の変形（導出）は、別々の $$…$$ に分けず 1つの $$\\begin{aligned} … \\end{aligned}$$ にまとめる。各行は主要な関係記号（=, \\approx, <, >, \\le, \\ge 等）の直前に & を置き、行末を \\\\ で改行して縦にそろえる（例: a &= b \\\\ &= c）。互いに無関係な式どうしは別ブロックにする。"
+    : "・別々の数式は別々の $$ … $$ に分ける（1式＝1ブロック）。本来ひとつの連立・整列された式のみ aligned 等で1ブロックにまとめる。";
   if(MODE==="math"){
     return [
       "あなたは画像内の数式を正確に読み取るOCRです。",
       "画像に写っている数式だけを抽出し、それぞれをLaTeXで書き出してください。",
       "・独立した数式は 1つにつき $$ … $$ で囲み、1行に1式。",
-      "・別々の数式は別々の $$ … $$ に分ける（1式＝1ブロック）。本来ひとつの連立・整列された式のみ aligned 等で1ブロックにまとめる。",
+      groupRule,
       "・通常の文章・見出し・図の説明は無視する。",
       "・記号は原則そのまま（\\alpha, \\sum, \\int, 添字 x_{i}, 分数 \\frac{}{} 等）。",
       "・化学式・化学反応式は mhchem 記法 \\ce{...} を使う（例: $$\\ce{H2O}$$, $$\\ce{2H2 + O2 -> 2H2O}$$, イオンは \\ce{Na+} や \\ce{SO4^2-}, 状態は \\ce{CaCO3(s)}）。構造式（ベンゼン環など図）は無理に描かず、示性式・分子式で書く。",
@@ -355,13 +369,14 @@ function buildPrompt(){
     "・本文の文章はそのままプレーンテキストで（翻訳・要約・補完はしない）。",
     "・文中に埋め込まれた数式・記号は $ … $ で囲む。",
     "・独立して表示される数式（別行立て）は $$ … $$ で囲む。",
+    (ALIGN ? "・別行立ての一連の変形（導出）は 1つの $$\\begin{aligned} … \\end{aligned}$$ にまとめ、各行の関係記号（= 等）の直前に & を置き行末を \\\\ で改行して縦にそろえる。無関係な式は別ブロックにする。" : null),
     "・化学式・化学反応式は mhchem 記法 \\ce{...} で表す（インライン $\\ce{H2O}$、別行立て $$\\ce{2H2 + O2 -> 2H2O}$$、イオンは \\ce{SO4^2-} 等）。構造式の図は無理に描かず示性式・分子式で。",
     "・番号付き数式の式番号 (1) 等も残す。",
     "・表は可能ならMarkdownの表で、無理ならそのまま。",
     "・見出しや箇条書きの体裁はできるだけ保つ。",
     "・原文が英語ならそのまま英語で（勝手に和訳しない）。",
     "・前置き・解説・コードフェンス(```)は付けず、書き起こし結果だけを返す。"
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 /* ================= Gemini Vision 呼び出し ================= */
